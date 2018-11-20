@@ -41,25 +41,7 @@ static starttls_t tlsdata_now;
 
 typedef struct {
     int bEnabled;
-} tlspoolConfig;
-
-static void *create_tlspool_server_config(apr_pool_t *p, server_rec *s)
-{
-    tlspoolConfig *pConfig = apr_pcalloc(p, sizeof *pConfig);
-
-    pConfig->bEnabled = 0;
-
-    return pConfig;
-}
-
-static const char *tlspool_on(cmd_parms *cmd, void *dummy, int arg)
-{
-    tlspoolConfig *pConfig = ap_get_module_config(cmd->server->module_config,
-                                               &tlspool_module);
-    pConfig->bEnabled = arg;
-
-    return NULL;
-}
+} tlspool_config;
 
 static void trace_nocontext(apr_pool_t *p, const char *file, int line,
                             const char *note)
@@ -76,6 +58,30 @@ static void trace_nocontext(apr_pool_t *p, const char *file, int line,
 }
 
 /*
+ * Locate our server configuration record for the specified server.
+ */
+static tlspool_config *our_sconfig(const server_rec *s)
+{
+    return (tlspool_config *) ap_get_module_config(s->module_config, &tlspool_module);
+}
+
+static void *create_tlspool_server_config(apr_pool_t *p, server_rec *s)
+{
+    tlspool_config *pConfig = apr_pcalloc(p, sizeof *pConfig);
+
+    pConfig->bEnabled = 0;
+
+    return pConfig;
+}
+
+static const char *tlspool_on(cmd_parms *cmd, void *dummy, int arg)
+{
+    tlspool_config *pConfig = our_sconfig(cmd->server);
+    pConfig->bEnabled = arg;
+    return NULL;
+}
+
+/*
  * This routine is called just after the server accepts the connection,
  * but before it is handed off to a protocol module to be served.  The point
  * of this hook is to allow modules an opportunity to modify the connection
@@ -86,33 +92,38 @@ static void trace_nocontext(apr_pool_t *p, const char *file, int line,
  */
 static int tlspool_pre_connection(conn_rec *c, void *csd)
 {
-    char *note;
-    apr_socket_t *apr_socket = (apr_socket_t *) csd;
-    int cnx = apr_socket->socketdes;
-    int plainfd = -1;
+    tlspool_config *pConfig = our_sconfig(c->base_server);
+    if (pConfig->bEnabled) {
+        char *note;
+        apr_socket_t *apr_socket = (apr_socket_t *) csd;
+        int cnx = apr_socket->socketdes;
+        int plainfd = -1;
 
-    tlsdata_now = tlsdata_srv;
-    if (-1 == tlspool_starttls (cnx, &tlsdata_now, &plainfd, NULL)) {
-        trace_nocontext(c->pool, __FILE__, __LINE__, "!!!!");
-        if (plainfd >= 0) {
-            close (plainfd);
+        tlsdata_now = tlsdata_srv;
+        if (-1 == tlspool_starttls (cnx, &tlsdata_now, &plainfd, NULL)) {
+            trace_nocontext(c->pool, __FILE__, __LINE__, "Failed to STARTTLS on Apache");
+            if (plainfd >= 0) {
+                close (plainfd);
+            }
+            exit (1);
         }
-        exit (1);
-    }
-    apr_socket->socketdes = plainfd;
+        apr_socket->socketdes = plainfd;
 
-    /*
-     * Log the call and exit.
-     */
-    note = apr_psprintf(c->pool, "x_pre_connection(c = %pp, p = %pp, old = %d, new = %d)",
+        /*
+         * Log the call and exit.
+         */
+        note = apr_psprintf(c->pool, "tlspool_pre_connection: c = %pp, pool = %pp, old = %d, new = %d",
                         (void*) c, (void*) c->pool, cnx, plainfd);
-    trace_nocontext(c->pool, __FILE__, __LINE__, note);
+        trace_nocontext(c->pool, __FILE__, __LINE__, note);
+    } else {
+        trace_nocontext(c->pool, __FILE__, __LINE__, "tlspool_pre_connection: TLSPoolEnable off");
+    }
     return OK;
 }
 
 static const command_rec tlspool_cmds[] =
 {
-    AP_INIT_FLAG("ProtocolTlspool", tlspool_on, NULL, RSRC_CONF,
+    AP_INIT_FLAG("TLSPoolEnable", tlspool_on, NULL, RSRC_CONF,
                  "Run a tlspool server on this host"),
     { NULL }
 };
