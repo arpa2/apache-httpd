@@ -31,7 +31,8 @@ module AP_MODULE_DECLARE_DATA tlspool_module;
 
 static starttls_t tlsdata_srv = {
         .flags = PIOF_STARTTLS_LOCALROLE_SERVER
-                | PIOF_STARTTLS_REMOTEROLE_CLIENT,
+                | PIOF_STARTTLS_REMOTEROLE_CLIENT
+                | PIOF_STARTTLS_REQUEST_REMOTEID,
         .local = 0,
         .ipproto = IPPROTO_TCP,
         .localid = "testsrv@tlspool.arpa2.lab",
