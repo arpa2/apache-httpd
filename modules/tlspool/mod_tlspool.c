@@ -35,8 +35,7 @@ static starttls_t tlsdata_srv = {
                 | PIOF_STARTTLS_IGNORE_REMOTEID,
         .local = 0,
         .ipproto = IPPROTO_TCP,
-        .localid = "testsrv@tlspool.arpa2.lab",
-        .service = "generic",
+        .service = "http",
 };
 static starttls_t tlsdata_now;
 
