@@ -32,10 +32,11 @@ module AP_MODULE_DECLARE_DATA tlspool_module;
 static starttls_t tlsdata_srv = {
         .flags = PIOF_STARTTLS_LOCALROLE_SERVER
                 | PIOF_STARTTLS_REMOTEROLE_CLIENT
-                | PIOF_STARTTLS_IGNORE_REMOTEID,
+                | PIOF_STARTTLS_IGNORE_REMOTEID
+		| PIOF_STARTTLS_LOCALID_CHECK,
         .local = 0,
         .ipproto = IPPROTO_TCP,
-        .localid = "testsrv@tlspool.arpa2.lab",
+        .localid = "",
         .service = "generic",
 };
 static starttls_t tlsdata_now;
@@ -82,6 +83,22 @@ static const char *tlspool_on(cmd_parms *cmd, void *dummy, int arg)
     return NULL;
 }
 
+static int namedconnect_vhost (starttls_t *tlsdata, void *privdata) {
+#if !defined(WINDOWS_PORT)
+	int soxx[2];
+	if (socketpair (AF_UNIX, SOCK_STREAM, 0, soxx) == 0)
+#else /* WINDOWS_PORT */
+	// https://github.com/ncm/selectable-socketpair
+	extern int dumb_socketpair(SOCKET socks[2], int make_overlapped);
+	SOCKET soxx[2];
+	if (dumb_socketpair(soxx, 1) == 0)
+#endif /* WINDOWS_PORT */
+	{
+		* (int *) privdata = soxx [1];
+		return soxx [0];
+	}
+}
+
 /*
  * This routine is called just after the server accepts the connection,
  * but before it is handed off to a protocol module to be served.  The point
@@ -101,7 +118,7 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
         int plainfd = -1;
 
         tlsdata_now = tlsdata_srv;
-        if (-1 == tlspool_starttls (cnx, &tlsdata_now, &plainfd, NULL)) {
+        if (-1 == tlspool_starttls (cnx, &tlsdata_now, &plainfd, namedconnect_vhost)) {
             trace_nocontext(c->pool, __FILE__, __LINE__, "Failed to STARTTLS on Apache");
             if (plainfd >= 0) {
                 close (plainfd);
