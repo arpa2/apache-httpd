@@ -1,1 +1,54 @@
-TLSPoolEnable on
+<IfModule mod_tlspool.c>
+	<VirtualHost *:80>
+		ServerName tlspool.arpa2.lab
+		ServerAdmin webmaster@localhost
+
+		DocumentRoot /usr/local/apache2/htdocs/tlspool.arpa2.lab
+		<Directory />
+			Options FollowSymLinks
+			AllowOverride None
+		</Directory>
+		<Directory /usr/local/apache2/htdocs/tlspool.arpa2.lab>
+			Options FollowSymLinks MultiViews
+			AllowOverride All
+			Order allow,deny
+			allow from all
+		</Directory>
+
+		TLSPoolEnable on
+
+		# ErrorLog ${APACHE_LOG_DIR}/tlspool.arpa2.lab/error.log
+
+		# Possible values include: debug, info, notice, warn, error, crit,
+		# alert, emerg.
+		LogLevel warn
+
+		# CustomLog ${APACHE_LOG_DIR}/tlspool.arpa2.lab/access.log combined
+	</VirtualHost>
+	<VirtualHost *:80>
+		ServerName playground.arpa2.lab
+		ServerAdmin webmaster@localhost
+
+		DocumentRoot /usr/local/apache2/htdocs/playground.arpa2.lab
+		<Directory />
+			Options FollowSymLinks
+			AllowOverride None
+		</Directory>
+		<Directory /usr/local/apache2/htdocs/playground.arpa2.lab>
+			Options FollowSymLinks MultiViews
+			AllowOverride All
+			Order allow,deny
+			allow from all
+		</Directory>
+
+		TLSPoolEnable on
+
+		# ErrorLog ${APACHE_LOG_DIR}/playground.arpa2.lab/error.log
+
+		# Possible values include: debug, info, notice, warn, error, crit,
+		# alert, emerg.
+		LogLevel warn
+
+		# CustomLog ${APACHE_LOG_DIR}/playground.arpa2.lab/access.log combined
+	</VirtualHost>
+</IfModule>
