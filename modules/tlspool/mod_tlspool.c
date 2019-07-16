@@ -29,10 +29,34 @@
 
 module AP_MODULE_DECLARE_DATA tlspool_module;
 
+#define strcEQ(s1,s2)    (strcasecmp(s1,s2)    == 0)
+
+/*
+ *  the table of configuration directives we provide
+ */
+
+#define SSL_CMD_ALL(name, args, desc) \
+        AP_INIT_##args("SSL"#name, ssl_cmd_SSL##name, \
+                       NULL, RSRC_CONF|OR_AUTHCFG, desc),
+
+#ifndef UNSET
+#define UNSET (-1)
+#endif
+
+/**
+ * Define the SSL verify levels
+ */
+typedef enum {
+    SSL_CVERIFY_UNSET           = UNSET,
+    SSL_CVERIFY_NONE            = 0,
+    SSL_CVERIFY_OPTIONAL        = 1,
+    SSL_CVERIFY_REQUIRE         = 2,
+    SSL_CVERIFY_OPTIONAL_NO_CA  = 3
+} ssl_verify_t;
+
 static starttls_t tlsdata_srv = {
         .flags = PIOF_STARTTLS_LOCALROLE_SERVER
                 | PIOF_STARTTLS_REMOTEROLE_CLIENT
-                | PIOF_STARTTLS_IGNORE_REMOTEID
 		| PIOF_STARTTLS_LOCALID_CHECK,
         .local = 0,
         .ipproto = IPPROTO_TCP,
@@ -43,6 +67,7 @@ static starttls_t tlsdata_now;
 
 typedef struct {
     int bEnabled;
+    ssl_verify_t  nVerifyClient;
 } tlspool_config;
 
 static void trace_nocontext(apr_pool_t *p, const char *file, int line,
@@ -118,8 +143,20 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
         int plainfd = -1;
 
         tlsdata_now = tlsdata_srv;
+        switch (pConfig->nVerifyClient) {
+            case SSL_CVERIFY_REQUIRE:
+                // default on tlspool_starttls
+                break;
+            case SSL_CVERIFY_OPTIONAL:
+                tlsdata_now.flags |= PIOF_STARTTLS_REQUEST_REMOTEID;
+                break;
+            default:
+                tlsdata_now.flags |= PIOF_STARTTLS_IGNORE_REMOTEID;
+                break;
+        }
         if (-1 == tlspool_starttls (cnx, &tlsdata_now, &plainfd, namedconnect_vhost)) {
-            trace_nocontext(c->pool, __FILE__, __LINE__, "Failed to STARTTLS on Apache");
+            note = apr_psprintf(c->pool, "Failed to STARTTLS on Apache: errno = %d", errno);
+            trace_nocontext(c->pool, __FILE__, __LINE__, note);
             if (plainfd >= 0) {
                 close (plainfd);
             }
@@ -130,8 +167,8 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
         /*
          * Log the call and exit.
          */
-        note = apr_psprintf(c->pool, "tlspool_pre_connection: c = %pp, pool = %pp, old = %d, new = %d",
-                        (void*) c, (void*) c->pool, cnx, plainfd);
+        note = apr_psprintf(c->pool, "tlspool_pre_connection: c = %pp, pool = %pp, old = %d, new = %d, flags = %x",
+                        (void*) c, (void*) c->pool, cnx, plainfd, tlsdata_now.flags);
         trace_nocontext(c->pool, __FILE__, __LINE__, note);
     } else {
         trace_nocontext(c->pool, __FILE__, __LINE__, "tlspool_pre_connection: TLSPoolEnable off");
@@ -139,10 +176,56 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
     return OK;
 }
 
+static const char *ssl_cmd_verify_parse(cmd_parms *parms,
+                                        const char *arg,
+                                        ssl_verify_t *id)
+{
+    if (strcEQ(arg, "none") || strcEQ(arg, "off")) {
+        *id = SSL_CVERIFY_NONE;
+    }
+    else if (strcEQ(arg, "optional")) {
+        *id = SSL_CVERIFY_OPTIONAL;
+    }
+    else if (strcEQ(arg, "require") || strcEQ(arg, "on")) {
+        *id = SSL_CVERIFY_REQUIRE;
+    }
+    else if (strcEQ(arg, "optional_no_ca")) {
+        *id = SSL_CVERIFY_OPTIONAL_NO_CA;
+    }
+    else {
+        return apr_pstrcat(parms->temp_pool, parms->cmd->name,
+                           ": Invalid argument '", arg, "'",
+                           NULL);
+    }
+
+    return NULL;
+}
+
+const char *ssl_cmd_SSLVerifyClient(cmd_parms *cmd,
+                                    void *dcfg,
+                                    const char *arg)
+{
+    tlspool_config *pConfig = our_sconfig(cmd->server);
+
+    ssl_verify_t mode = SSL_CVERIFY_NONE;
+    const char *err;
+
+    if ((err = ssl_cmd_verify_parse(cmd, arg, &mode))) {
+        return err;
+    }
+
+    pConfig->nVerifyClient = mode;
+
+    return NULL;
+}
+
 static const command_rec tlspool_cmds[] =
 {
     AP_INIT_FLAG("TLSPoolEnable", tlspool_on, NULL, RSRC_CONF,
                  "Run a tlspool server on this host"),
+    SSL_CMD_ALL(VerifyClient, TAKE1,
+                "SSL Client verify type "
+                "('none', 'optional', 'require', 'optional_no_ca')")
     { NULL }
 };
 
