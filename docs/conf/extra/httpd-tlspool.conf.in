@@ -1,4 +1,5 @@
 <IfModule mod_tlspool.c>
+	TLSPoolEnable on
 	<VirtualHost *:80>
 		ServerName tlspool.arpa2.lab
 		ServerAdmin webmaster@localhost
@@ -14,8 +15,6 @@
 			Order allow,deny
 			allow from all
 		</Directory>
-
-		TLSPoolEnable on
 
 		# ErrorLog ${APACHE_LOG_DIR}/tlspool.arpa2.lab/error.log
 
@@ -40,8 +39,6 @@
 			Order allow,deny
 			allow from all
 		</Directory>
-
-		TLSPoolEnable on
 
 		# ErrorLog ${APACHE_LOG_DIR}/playground.arpa2.lab/error.log
 

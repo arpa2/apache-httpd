@@ -61,7 +61,7 @@ static starttls_t tlsdata_srv = {
         .local = 0,
         .ipproto = IPPROTO_TCP,
         .localid = "",
-        .service = "generic",
+        .service = "http",
 };
 static starttls_t tlsdata_now;
 
