@@ -21,7 +21,7 @@
 #include "http_connection.h"
 #include "http_core.h"
 #include "http_log.h"
-
+#include "http_vhost.h"
 #include "apr_strings.h"
 #include "arch/unix/apr_arch_networkio.h"
 
@@ -63,12 +63,13 @@ static starttls_t tlsdata_srv = {
         .localid = "",
         .service = "http",
 };
+
 static starttls_t tlsdata_now;
 
 typedef struct {
-    int bEnabled;
-    ssl_verify_t  nVerifyClient;
-} tlspool_config;
+    int          bEnabled;
+    ssl_verify_t nVerifyClient;
+} tlspool_server_config;
 
 static void trace_nocontext(apr_pool_t *p, const char *file, int line,
                             const char *note)
@@ -87,28 +88,88 @@ static void trace_nocontext(apr_pool_t *p, const char *file, int line,
 /*
  * Locate our server configuration record for the specified server.
  */
-static tlspool_config *our_sconfig(const server_rec *s)
+static tlspool_server_config *our_sconfig(const server_rec *s)
 {
-    return (tlspool_config *) ap_get_module_config(s->module_config, &tlspool_module);
+    return (tlspool_server_config *) ap_get_module_config(s->module_config, &tlspool_module);
 }
+
+static tlspool_server_config* pMainConfig;
 
 static void *create_tlspool_server_config(apr_pool_t *p, server_rec *s)
 {
-    tlspool_config *pConfig = apr_pcalloc(p, sizeof *pConfig);
+   tlspool_server_config *pConfig = apr_pcalloc(p, sizeof *pConfig);
 
     pConfig->bEnabled = 0;
+    pConfig->nVerifyClient = SSL_CVERIFY_NONE;
 
+    char *note = apr_psprintf(p, "create_tlspool_server_config: server_hostname = %s", s->server_hostname);
+    if (s->server_hostname == NULL) {
+        pMainConfig = pConfig;
+    }
+    trace_nocontext(p, __FILE__, __LINE__, note);
     return pConfig;
 }
 
 static const char *tlspool_on(cmd_parms *cmd, void *dummy, int arg)
 {
-    tlspool_config *pConfig = our_sconfig(cmd->server);
+    char *note;
+    tlspool_server_config *pConfig = our_sconfig(cmd->server);
+
     pConfig->bEnabled = arg;
+    note = apr_psprintf(cmd->temp_pool, "tlspool_on arg = %d", arg);
+    trace_nocontext(cmd->temp_pool, __FILE__, __LINE__, note);
+    ap_directive_t* parent = cmd->directive->parent;
+    if (parent == NULL) {
+        note = "parent is NULL";
+    } else {
+        note = apr_psprintf(cmd->temp_pool, "directive = %s, args = %s", parent->directive, parent->args);
+    }
+    trace_nocontext(cmd->temp_pool, __FILE__, __LINE__, note);
+    server_rec* server = cmd->server;
+    note = apr_psprintf(cmd->temp_pool, "server_hostname = %s, pConfig = %p", server->server_hostname, pConfig);
+    trace_nocontext(cmd->temp_pool, __FILE__, __LINE__, note);
     return NULL;
 }
 
-static int namedconnect_vhost (starttls_t *tlsdata, void *privdata) {
+static int func_cb(void* baton, conn_rec *conn, server_rec *s) 
+{
+    starttls_t *tlsdata = (starttls_t*) baton;
+    if (strcEQ(s->server_hostname, tlsdata->localid)) {
+        tlspool_server_config *pConfig = our_sconfig(s);
+        ssl_verify_t mode = pConfig->nVerifyClient;
+        // unset previous set flags;
+        tlsdata->flags &= ~(PIOF_STARTTLS_REQUEST_REMOTEID | PIOF_STARTTLS_IGNORE_REMOTEID);
+        switch (mode) {
+            case SSL_CVERIFY_REQUIRE:
+            // default on tlspool_starttls
+                break;
+            case SSL_CVERIFY_OPTIONAL:
+                tlsdata->flags |= PIOF_STARTTLS_REQUEST_REMOTEID;
+                break;
+            default:
+                tlsdata->flags |= PIOF_STARTTLS_IGNORE_REMOTEID;
+                break;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static char tmp[4096];
+
+typedef struct {
+    int plainfd;
+    conn_rec *conn;
+} privdata_t;
+
+static int namedconnect_vhost (starttls_t *tlsdata, void *p)
+{
+    privdata_t* privdata = (privdata_t *) p;
+strcpy(tmp, tlsdata->localid);
+    if (tlsdata->localid[0] != '\0') {
+        ap_vhost_iterate_given_conn(privdata->conn, func_cb, tlsdata);
+    }
+
 #if !defined(WINDOWS_PORT)
 	int soxx[2];
 	if (socketpair (AF_UNIX, SOCK_STREAM, 0, soxx) == 0)
@@ -119,7 +180,7 @@ static int namedconnect_vhost (starttls_t *tlsdata, void *privdata) {
 	if (dumb_socketpair(soxx, 1) == 0)
 #endif /* WINDOWS_PORT */
 	{
-		* (int *) privdata = soxx [1];
+		privdata->plainfd = soxx [1];
 		return soxx [0];
 	}
 }
@@ -135,15 +196,15 @@ static int namedconnect_vhost (starttls_t *tlsdata, void *privdata) {
  */
 static int tlspool_pre_connection(conn_rec *c, void *csd)
 {
-    tlspool_config *pConfig = our_sconfig(c->base_server);
-    if (pConfig->bEnabled) {
-        char *note;
+    char *note;
+
+    if (pMainConfig->bEnabled) {
         apr_socket_t *apr_socket = (apr_socket_t *) csd;
         int cnx = apr_socket->socketdes;
-        int plainfd = -1;
+        privdata_t privdata = { -1, c };
 
         tlsdata_now = tlsdata_srv;
-        switch (pConfig->nVerifyClient) {
+        switch (pMainConfig->nVerifyClient) {
             case SSL_CVERIFY_REQUIRE:
                 // default on tlspool_starttls
                 break;
@@ -154,21 +215,23 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
                 tlsdata_now.flags |= PIOF_STARTTLS_IGNORE_REMOTEID;
                 break;
         }
-        if (-1 == tlspool_starttls (cnx, &tlsdata_now, &plainfd, namedconnect_vhost)) {
+        note = apr_psprintf(c->pool, "tlspool_pre_connection: c = %pp, pool = %pp, old = %d, nVerifyCLient = %d, flags = 0x%08x",
+                        (void*) c, (void*) c->pool, cnx, pMainConfig->nVerifyClient, tlsdata_now.flags);
+        trace_nocontext(c->pool, __FILE__, __LINE__, note);
+        if (-1 == tlspool_starttls (cnx, &tlsdata_now, &privdata, namedconnect_vhost)) {
             note = apr_psprintf(c->pool, "Failed to STARTTLS on Apache: errno = %d", errno);
             trace_nocontext(c->pool, __FILE__, __LINE__, note);
-            if (plainfd >= 0) {
-                close (plainfd);
+            if (privdata.plainfd >= 0) {
+                close (privdata.plainfd);
             }
             exit (1);
         }
-        apr_socket->socketdes = plainfd;
+        apr_socket->socketdes = privdata.plainfd;
 
         /*
          * Log the call and exit.
          */
-        note = apr_psprintf(c->pool, "tlspool_pre_connection: c = %pp, pool = %pp, old = %d, new = %d, flags = %x",
-                        (void*) c, (void*) c->pool, cnx, plainfd, tlsdata_now.flags);
+        note = apr_psprintf(c->pool, "tlspool_pre_connection: new = %d, localid = %s", privdata.plainfd, tmp);
         trace_nocontext(c->pool, __FILE__, __LINE__, note);
     } else {
         trace_nocontext(c->pool, __FILE__, __LINE__, "tlspool_pre_connection: TLSPoolEnable off");
@@ -205,7 +268,7 @@ const char *ssl_cmd_SSLVerifyClient(cmd_parms *cmd,
                                     void *dcfg,
                                     const char *arg)
 {
-    tlspool_config *pConfig = our_sconfig(cmd->server);
+    tlspool_server_config *pConfig = our_sconfig(cmd->server);
 
     ssl_verify_t mode = SSL_CVERIFY_NONE;
     const char *err;
@@ -214,8 +277,12 @@ const char *ssl_cmd_SSLVerifyClient(cmd_parms *cmd,
         return err;
     }
 
-    pConfig->nVerifyClient = mode;
+    server_rec* server = cmd->server;
+    char* server_hostname = server->server_hostname;
+    char* note = apr_psprintf(cmd->temp_pool, "ssl_cmd_SSLVerifyClient: server_hostname = %s", server_hostname);
+    trace_nocontext(cmd->temp_pool, __FILE__, __LINE__, note);
 
+    pConfig->nVerifyClient = mode;
     return NULL;
 }
 
