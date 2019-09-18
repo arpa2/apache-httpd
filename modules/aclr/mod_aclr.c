@@ -24,7 +24,6 @@
 #include "http_vhost.h"
 #include "http_request.h"
 #include "apr_strings.h"
-#include "arch/unix/apr_arch_networkio.h"
 
 
 module AP_MODULE_DECLARE_DATA aclr_module;
@@ -87,7 +86,8 @@ static int x_check_authz(request_rec *r)
      * Log the call and return OK, or access will be denied (even though we
      * didn't actually do anything).
      */
-    char *note = apr_psprintf(r->pool, "x_check_authz()");
+    char *note = apr_psprintf(r->pool, "x_check_authz(): user = %s, uri = %s, realm = %s, ap_auth_type = %s",
+                    r->user, r->uri, ap_auth_name(r), r->ap_auth_type);
     trace_nocontext(r->pool, __FILE__, __LINE__, note);
     return DECLINED;
 }
