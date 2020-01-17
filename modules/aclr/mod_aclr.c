@@ -166,7 +166,7 @@ static int x_check_authz(request_rec *r)
     trace_nocontext(r->pool, __FILE__, __LINE__, note);
     if (a2aclr_hasright(dconf->ctx, reqright, realm, strlen(realm),
         remote_user, strlen(remote_user), HTTPUUID, sizeof(HTTPUUID) - 1,
-        uri, strlen(uri)) == 0) {
+        "", 0) == 0) {
         note = apr_psprintf(r->pool, "%c: FORBIDDEN", reqright);
         trace_nocontext(r->pool, __FILE__, __LINE__, note);
 //      r->keepalive = 0;
