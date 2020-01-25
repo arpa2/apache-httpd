@@ -162,9 +162,9 @@ static int x_check_authz(request_rec *r)
         reqright = ACL_GET;
     }
     dconf = our_dconfig(r);
-    note = apr_psprintf(r->pool, "looking up %c in %s", reqright, dconf->dbpath);
+    note = apr_psprintf(r->pool, "looking up %c in %s, ctx: %pp", reqright, dconf->dbpath, dconf->ctx);
     trace_nocontext(r->pool, __FILE__, __LINE__, note);
-    if (a2aclr_hasright(dconf->ctx, reqright, realm, strlen(realm),
+    if (dconf->ctx == NULL || a2aclr_hasright(dconf->ctx, reqright, realm, strlen(realm),
         remote_user, strlen(remote_user), HTTPUUID, sizeof(HTTPUUID) - 1,
         "", 0) == 0) {
         note = apr_psprintf(r->pool, "%c: FORBIDDEN", reqright);
