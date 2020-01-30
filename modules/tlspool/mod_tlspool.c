@@ -23,8 +23,7 @@
 #include "http_log.h"
 #include "http_vhost.h"
 #include "apr_strings.h"
-#include "arch/unix/apr_arch_networkio.h"
-
+#include "apr_portable.h"
 #include <tlspool/starttls.h>
 
 module AP_MODULE_DECLARE_DATA tlspool_module;
@@ -200,7 +199,9 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
 
     if (pMainConfig->bEnabled) {
         apr_socket_t *apr_socket = (apr_socket_t *) csd;
-        int cnx = apr_socket->socketdes;
+        apr_os_sock_t os_sock;
+        apr_os_sock_get(&os_sock, apr_socket);
+        int cnx = (int) os_sock;
         privdata_t privdata = { -1, c };
 
         tlsdata_now = tlsdata_srv;
@@ -226,7 +227,8 @@ static int tlspool_pre_connection(conn_rec *c, void *csd)
             }
             exit (1);
         }
-        apr_socket->socketdes = privdata.plainfd;
+        os_sock = (apr_os_sock_t) privdata.plainfd;
+        apr_os_sock_put(&apr_socket, &os_sock, c->pool);
 
         /*
          * Log the call and exit.
